@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Suivi Documents & Stock</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="https://unpkg.com/html5-qrcode"></script>
+<style>
+body { font-family: Arial, sans-serif; padding: 20px; background:#f5f5f5; }
+h2, h3 { text-align:center; }
+.box { border: 1px solid #ccc; padding: 15px; margin: 15px auto; max-width: 500px; background:white; border-radius:5px; }
+input, select, button { font-size:16px; padding:8px; margin-top:5px; width: 100%; box-sizing:border-box; }
+table { border-collapse: collapse; width: 100%; margin-top:10px; }
+th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+img { max-width: 100px; display:block; margin: auto; }
+button { cursor:pointer; background:#4CAF50; color:white; border:none; border-radius:4px; }
+button:hover { background:#45a049; }
+</style>
+</head>
+<body>
+
+<h2>📂 Consultation & Suivi</h2>
+
+<div class="box">
+<h3>⌨️ Scan code-barres / ID manuellement</h3>
+<input id="codeInput" placeholder="Scannez ou tapez le code">
+<button onclick="searchCode()">Valider</button>
+</div>
+
+<div class="box">
+<h3>📷 Scan caméra (QR / Code-barres)</h3>
+<div id="reader" style="width:300px;margin:auto;"></div>
+</div>
+
+<div class="box" id="resultContainer" style="display:none;">
+<h3>📄 Infos du document</h3>
+<div id="result"></div>
+</div>
+
+<div class="box" id="projectTableContainer" style="display:none;">
+<h3>📋 Tableau complet du projet</h3>
+<table id="projectTable">
+<thead>
+<tr>
+<th>Client</th>
+<th>Projet</th>
+<th>Type</th>
+<th>Intitulé</th>
+<th>Matière</th>
+<th>Taille</th>
+<th>Quantité</th>
+<th>Finitions</th>
+<th>PDF</th>
+<th>JPG</th>
+<th>QR</th>
+<th>Date</th>
+<th>Suivi</th>
+</tr>
+</thead>
+<tbody></tbody>
+</table>
+</div>
+
+<div class="box" id="stockTableContainer" style="display:none;">
+<h3>📦 Stock</h3>
+<table id="stockTable">
+<thead>
+<tr>
+<th>Matière</th>
+<th>Quantité</th>
+<th>Seuil alerte</th>
+<th>Dernière MAJ</th>
+<th>Actions</th>
+</tr>
+</thead>
+<tbody></tbody>
+</table>
+</div>
+
+<script>
+// ========================
+// CONFIG GOOGLE SHEET
+// ========================
+const sheetCSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRvPLilTo0epXslBt-90fmJv2XekeVCjxUgdd6y6zeYN-NQ_G4ZAWLubgIxAD3kvyFJHrDWCiHWreYS/pub?gid=0&single=true&output=csv";
+const stockCSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRvPLilTo0epXslBt-90fmJv2XekeVCjxUgdd6y6zeYN-NQ_G4ZAWLubgIxAD3kvyFJHrDWCiHWreYS/pub?gid=535428035&single=true&output=tsv";
+let data = [];
+let stockData = [];
+
+// ========================
+// FETCH DATA
+// ========================
+async function fetchData() {
+  const res = await fetch(sheetCSV);
+  const text = await res.text();
+  data = text.split("\n").slice(1).map(l => l.split("\t"));
+
+  const resStock = await fetch(stockCSV);
+  const textStock = await resStock.text();
+  stockData = textStock.split("\n").slice(1).map(l => l.split("\t"));
+  renderStockTable();
+}
+fetchData();
+
+// ========================
+// DISPLAY FUNCTIONS
+// ========================
+function displayResult(row) {
+  document.getElementById("resultContainer").style.display = "block";
+  document.getElementById("projectTableContainer").style.display = "block";
+
+  document.getElementById("result").innerHTML = `
+    <p><b>Client :</b> ${row[1]}</p>
+    <p><b>Projet :</b> ${row[2]}</p>
+    <p><b>Type :</b> ${row[3]}</p>
+    <p><b>Intitulé :</b> ${row[4]}</p>
+    <p><b>Matière :</b> ${row[5]}</p>
+    <p><b>Taille :</b> ${row[6]}</p>
+    <p><b>Quantité :</b> ${row[10]}</p>
+    <p><b>Finitions :</b> ${row[11]}</p>
+    <img src="${row[9]}" alt="Visuel">
+    <p><a href="${row[8]}" target="_blank"><button>📄 Ouvrir PDF</button></a></p>
+    <p><a href="${row[10]}" target="_blank"><button>🖼️ Ouvrir JPG</button></a></p>
+    <p><a href="${row[11]}" target="_blank"><button>🔗 Ouvrir QR</button></a></p>
+  `;
+  renderProjectTable(row[2]); // Affiche tous les éléments du même projet
+}
+
+function renderProjectTable(projetName) {
+  const tbody = document.querySelector("#projectTable tbody");
+  tbody.innerHTML = "";
+  const projetRows = data.filter(r => r[2] === projetName);
+  projetRows.forEach(r => {
+    const tr = document.createElement("tr");
+    r.forEach((c,i) => {
+      if (i === 12) { // colonne suivi editable
+        const td = document.createElement("td");
+        const select = document.createElement("select");
+        ["Non reçu","Reçu","Imprimé","Livré"].forEach(opt => {
+          const o = document.createElement("option");
+          o.value = opt; o.text = opt;
+          if (c === opt) o.selected = true;
+          select.appendChild(o);
+        });
+        select.onchange = () => updateSheet(r[0], select.value);
+        td.appendChild(select);
+        tr.appendChild(td);
+      } else {
+        const td = document.createElement("td");
+        td.textContent = c;
+        tr.appendChild(td);
+      }
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+// ========================
+// STOCK TABLE
+// ========================
+function renderStockTable() {
+  const tbody = document.querySelector("#stockTable tbody");
+  tbody.innerHTML = "";
+  stockData.forEach(r => {
+    const tr = document.createElement("tr");
+    r.forEach((c,i) => {
+      const td = document.createElement("td");
+      td.textContent = c;
+      tr.appendChild(td);
+    });
+    const tdAction = document.createElement("td");
+    const btn = document.createElement("button");
+    btn.textContent = "Mettre à jour";
+    btn.onclick = () => alert("Fonction MAJ stock à coder via Apps Script");
+    tdAction.appendChild(btn);
+    tr.appendChild(tdAction);
+    tbody.appendChild(tr);
+  });
+}
+
+// ========================
+// SEARCH CODE
+// ========================
+function searchCode(code) {
+  if (!code) code = document.getElementById("codeInput").value.trim();
+  const row = data.find(r => r[0] === code);
+  if (!row) {
+    document.getElementById("resultContainer").style.display = "block";
+    document.getElementById("result").innerHTML = "❌ Code inconnu";
+    return;
+  }
+  displayResult(row);
+  document.getElementById("codeInput").value = "";
+  document.getElementById("codeInput").focus();
+}
+
+// ========================
+// HTML5 QR CODE
+// ========================
+if (/iPhone|Android/i.test(navigator.userAgent) || true) {
+  new Html5Qrcode("reader").start(
+    { facingMode: "environment" },
+    {
+      fps: 5,
+      qrbox: { width: 300, height: 120 },
+      formatsToSupport: [
+        Html5QrcodeSupportedFormats.CODE_128,
+        Html5QrcodeSupportedFormats.EAN_13,
+        Html5QrcodeSupportedFormats.EAN_8,
+        Html5QrcodeSupportedFormats.QR_CODE
+      ]
+    },
+    searchCode
+  );
+}
+
+// ========================
+// UPDATE GOOGLE SHEET
+// ========================
+function updateSheet(id, value) {
+  fetch("https://script.google.com/macros/s/AKfycbwyIk0Ecbg48EQ8Ig02rU9k3R4mQwqFjwc2PWlVgN07oNzDpIwterPI_hN53gzxx0kTXQ/exec", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id:id, suivi:value })
+  }).then(res => alert("✅ Suivi mis à jour"));
+}
+
+// ENTER KEY
+document.getElementById("codeInput").addEventListener("keydown", e => {
+  if (e.key === "Enter") searchCode();
+});
+</script>
+</body>
+</html>
